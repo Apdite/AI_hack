@@ -1,0 +1,7 @@
+ultralytics
+mmdet
+gradio
+streamlit
+torch
+torchvision
+pytest  
