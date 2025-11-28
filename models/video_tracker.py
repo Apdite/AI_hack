@@ -1,33 +1,68 @@
+# models/video_tracker.py
 import cv2
 from ultralytics import YOLO
 import pandas as pd
-import yaml  # Для конфига трекера
+import os
 
-# Конфиг для BoT-SORT (сохраните как botsort.yaml в configs/)
-tracker_config = {
-    'tracker_type': 'botsort',
-    'reid_weights': 'osnet_x0_25_msmt17.pt'  # Для re-ID
-}
-with open('configs/botsort.yaml', 'w') as f:
-    yaml.dump(tracker_config, f)
+# Загружаем модель один раз при старте
+model = YOLO("yolov8n.pt")
 
-model = YOLO('yolov8n.pt')  # Nano для скорости
+def analyze_video(video_path, output_csv="data/logs.csv"):
+    # Создаём папку data, если её нет
+    os.makedirs("data", exist_ok=True)
 
-def analyze_video(video_path, output_csv='data/logs.csv'):
     cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Не удалось открыть видео: {video_path}")
+
     logs = []
     frame_id = 0
-    while cap.isOpened():
+
+    print("Анализ видео начат…")
+    while True:
         ret, frame = cap.read()
-        if not ret: break
-        results = model.track(frame, persist=True, tracker='configs/botsort.yaml', classes=0)  # Люди, persistent ID
-        for r in results[0].boxes:
-            if r.id is not None:
-                bbox = r.xyxy[0].cpu().numpy().tolist()
-                logs.append({'frame': frame_id, 'id': int(r.id), 'bbox': bbox})
+        if not ret:
+            break
+
+        break
+
+        # BoT-SORT включён по умолчанию в новых версиях Ultralytics (8.3.233 у тебя стоит)
+        # поэтому просто указываем persist=True и classes=[0] (люди)
+        results = model.track(
+            source=frame,
+            persist=True,           # сохранять ID между кадрами
+            tracker="botsort.yaml",  # можно оставить, даже если файла нет — Ultralytics использует встроенный
+            classes=[0],            # только класс "person"
+            verbose=False
+        )
+
+        boxes = results[0].boxes
+        if boxes.id is not None:
+            for box, track_id in zip(boxes.xyxy, boxes.id):
+                x1, y1, x2, y2 = map(int, box)
+                tid = int(track_id)
+                center_x = (x1 + x2) // 2
+                center_y = (y1 + y2) // 2
+
+                logs.append({
+                    "frame": frame_id,
+                    "person_id": tid,
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "center_x": center_x,
+                    "center_y": center_y
+                })
+
         frame_id += 1
+
     cap.release()
 
+    # Сохраняем результат
     df = pd.DataFrame(logs)
-    df.to_csv(output_csv, index=False)
+    if not df.empty:
+        df.to_csv(output_csv, index=False)
+        print(f"Готово! Уникальных людей: {df['person_id'].nunique()}")
+    else:
+        print("Люди не обнаружены")
+        df = pd.DataFrame(columns=["frame", "person_id", "center_x", "center_y"])
+
     return df
